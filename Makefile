@@ -4,7 +4,7 @@ PBRIDGE_LIB = pbridge.a
 SOURCES = pbridge.c utils.c
 HEADERS = pbridge.h utils.h includes.h defines.h
 OBJS = $(SOURCES:.c=.o)
-EXECUTABLES = example
+EXECUTABLES = example target
 
 .PHONY: all
 all: ${PBRIDGE_LIB} $(EXECUTABLES)
@@ -16,4 +16,7 @@ $(PBRIDGE_LIB): $(OBJS)
 	ar rcs ${PBRIDGE_LIB} $(OBJS)
 
 example: example.c $(PBRIDGE_LIB)
+	$(CC) $(CFLAGS) -o $@ $^
+
+target: target.c
 	$(CC) $(CFLAGS) -o $@ $^
