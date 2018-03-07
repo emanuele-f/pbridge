@@ -28,15 +28,14 @@
 
 #include "pbridge.h"
 
-static pbridge_env_t prog_env;
-
 typedef struct callme_function {
-  pbridge_function_t_t *base;
+  pbridge_function_t *base;
 
   void *message_buf;
 } callme_function_t;
 
-callme_function_t callme_def;
+static pbridge_env_t prog_env;
+static callme_function_t callme_def;
 
 #define CALLME_STRING_BUF_SIZE 128
 
@@ -61,7 +60,7 @@ static void finalize_callme() {
 
 static int callme(const void *message) {
   // Write message into process memory
-  ptrace_poke_text(prog_env.pid, callme_def.message_buf, message, NULL, min(CALLME_STRING_BUF_SIZE, strlen(message)+1));
+  pbridge_rw_mem(prog_env.pid, callme_def.message_buf, message, NULL, min(CALLME_STRING_BUF_SIZE, strlen(message)+1));
 
   return (int) pbridge_invoke_function(callme_def.base);
 }
@@ -104,7 +103,7 @@ int main(int argc, char **argv) {
   callme_def.message_buf = pbridge_env_malloc(&prog_env, CALLME_STRING_BUF_SIZE);
   printf("Allocated a %d bytes buffer at %p\n", CALLME_STRING_BUF_SIZE, callme_def.message_buf);
 
-  void *fn_addr = pbridge_env_resolve_symbol_addr(&prog_env, "callme", 'T');
+  void *fn_addr = pbridge_env_resolve_static_symbol(&prog_env, "callme", 'T');
   if(! fn_addr) {
     puts("Cannot get callme address");
     terminate_process(pid);

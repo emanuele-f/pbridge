@@ -19,14 +19,25 @@
 #ifndef _UTILS_H_
 #define _UTILS_H_
 
+#ifndef min
 #define min(x, y) ((x < y) ? (x) : (y))
+#endif
 
-void* find_symbol_static_addr(const char *elf_path, const char *sym_name, char sym_type);
-int ptrace_poke_text(pid_t pid, const void *where, const void *new_text, void *old_text,
-            size_t len);
+#ifndef max
+#define max(x, y) ((x > y) ? (x) : (y))
+#endif
+
+/* Process control */
 int pbridge_wait_process(const char *name);
 int pbridge_singlestep(pid_t pid);
+int pbridge_rw_mem(pid_t pid, const void *where, const void *new_text, void *old_text,
+            size_t len);
+
+/* Misc */
+void* pbridge_find_static_addr(const char *elf_path, const char *sym_name, char sym_type);
 void* pbridge_get_text_relocation_base_addr(pid_t pid);
 int pbridge_get_process_path(pid_t pid, char *buf, size_t bufsize);
+void pbridge_hexdump(const void* data, size_t size);
+void pbridge_dump_registers(const struct user_regs_struct *regs);
 
 #endif

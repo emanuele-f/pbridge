@@ -18,19 +18,19 @@
 
 #include "includes.h"
 
-// Do not worry about alignment for now
+// Do not worry about alignment for now -> this is a bug, may overflow
 #define SKIP_ALIGNMENT_CHECK
 
 /* ******************************************************* */
 
-void* find_symbol_static_addr(const char *elf_path, const char *sym_name, char sym_type) {
+void* pbridge_find_static_addr(const char *elf_path, const char *sym_name, char sym_type) {
   void *addr = NULL;
   char *cmd = calloc(strlen(elf_path) + 4, 1);
-  char *lookup = calloc(strlen(sym_name) + 4, 1);
+  char *lookup = calloc(strlen(sym_name) + 5, 1);
   if(! cmd) return NULL;
 
   sprintf(cmd, "nm %s", elf_path);
-  sprintf(lookup, " %c %s", sym_type, sym_name);
+  sprintf(lookup, " %c %s\n", sym_type, sym_name);
 
   FILE *f = popen(cmd, "r");
 
@@ -64,7 +64,7 @@ void* find_symbol_static_addr(const char *elf_path, const char *sym_name, char s
 // should be in the new_text buffer whose size is given by len. If old_text is
 // not null, the original text data will be copied into it. Therefore old_text
 // must have the same size as new_text.
-int ptrace_poke_text(pid_t pid, const void *where, const void *new_text, void *old_text,
+int pbridge_rw_mem(pid_t pid, const void *where, const void *new_text, void *old_text,
               size_t len) {
 #ifndef SKIP_ALIGNMENT_CHECK
   if (len % sizeof(void *) != 0) {
@@ -75,7 +75,8 @@ int ptrace_poke_text(pid_t pid, const void *where, const void *new_text, void *o
 
   long poke_data;
   for (size_t copied = 0; copied < len; copied += sizeof(poke_data)) {
-    memmove(&poke_data, new_text + copied, sizeof(poke_data));
+    if(new_text) memmove(&poke_data, new_text + copied, sizeof(poke_data));
+
     if (old_text != NULL) {
       errno = 0;
       long peek_data = ptrace(PTRACE_PEEKTEXT, pid, where + copied, NULL);
@@ -85,9 +86,12 @@ int ptrace_poke_text(pid_t pid, const void *where, const void *new_text, void *o
       }
       memmove(old_text + copied, &peek_data, sizeof(peek_data));
     }
-    if (ptrace(PTRACE_POKETEXT, pid, where + copied, (void *)poke_data) < 0) {
-      perror("PTRACE_POKETEXT");
-      return -1;
+
+    if(new_text) {
+      if (ptrace(PTRACE_POKETEXT, pid, where + copied, (void *)poke_data) < 0) {
+        perror("PTRACE_POKETEXT");
+        return -1;
+      }
     }
   }
   return 0;
@@ -177,4 +181,88 @@ int pbridge_get_process_path(pid_t pid, char *buf, size_t bufsize) {
   }
 
   return -1;
+}
+
+/* ******************************************************* */
+
+// https://gist.github.com/ccbrown/9722406
+void pbridge_hexdump(const void* data, size_t size) {
+  char ascii[17];
+  size_t i, j;
+  ascii[16] = '\0';
+  for (i = 0; i < size; ++i) {
+    printf("%02X ", ((unsigned char*)data)[i]);
+    if (((unsigned char*)data)[i] >= ' ' && ((unsigned char*)data)[i] <= '~') {
+      ascii[i % 16] = ((unsigned char*)data)[i];
+    } else {
+      ascii[i % 16] = '.';
+    }
+    if ((i+1) % 8 == 0 || i+1 == size) {
+      printf(" ");
+      if ((i+1) % 16 == 0) {
+        printf("|  %s \n", ascii);
+      } else if (i+1 == size) {
+        ascii[(i+1) % 16] = '\0';
+        if ((i+1) % 16 <= 8) {
+          printf(" ");
+        }
+        for (j = (i+1) % 16; j < 16; ++j) {
+          printf("   ");
+        }
+        printf("|  %s \n", ascii);
+      }
+    }
+  }
+}
+
+/* ******************************************************* */
+
+//#define REGISTER_LONG_DUMP
+
+void pbridge_dump_registers(const struct user_regs_struct *regs) {
+  printf("[Registers at %p]\n"
+    " rax            0x%llx %llu\n"
+    " rbx            0x%llx %llu\n"
+    " rcx            0x%llx %llu\n"
+    " rdx            0x%llx %llu\n"
+    " rsi            0x%llx %llu\n"
+    " rdi            0x%llx %llu\n"
+    " rbp            0x%llx %llu\n"
+    " rsp            0x%llx %llu\n"
+    " r8             0x%llx %llu\n"
+    " r9             0x%llx %llu\n"
+    " r10            0x%llx %llu\n"
+    " r11            0x%llx %llu\n"
+    " r12            0x%llx %llu\n"
+    " r13            0x%llx %llu\n"
+    " r14            0x%llx %llu\n"
+    " r15            0x%llx %llu\n"
+    " rip            0x%llx %llu\n"
+#ifdef REGISTER_LONG_DUMP
+    " eflags         0x%llx %llu\n"
+    " cs             0x%llx %llu\n"
+    " ss             0x%llx %llu\n"
+    " ds             0x%llx %llu\n"
+    " es             0x%llx %llu\n"
+    " fs             0x%llx %llu\n"
+    " gs             0x%llx %llu\n"
+    " fs_base        0x%llx %llu\n"
+    " gs_base        0x%llx %llu\n"
+#endif
+    , regs,
+    regs->rax, regs->rax, regs->rbx, regs->rbx,
+    regs->rcx, regs->rcx, regs->rdx, regs->rdx,
+    regs->rsi, regs->rsi, regs->rdi, regs->rdi,
+    regs->rbp, regs->rbp, regs->rsp, regs->rsp, regs->r8, regs->r8,
+    regs->r9, regs->r9, regs->r10, regs->r10,
+    regs->r11, regs->r11, regs->r12, regs->r12,
+    regs->r13, regs->r13, regs->r14, regs->r14,
+    regs->r15, regs->r15, regs->rip, regs->rip
+#ifdef REGISTER_LONG_DUMP
+    , regs->eflags, regs->eflags, regs->cs, regs->cs,
+    regs->ss, regs->ss, regs->ds, regs->ds,
+    regs->es, regs->es, regs->fs, regs->fs, regs->gs, regs->gs,
+    regs->fs_base, regs->fs_base, regs->gs_base, regs->gs_base
+#endif
+  );
 }

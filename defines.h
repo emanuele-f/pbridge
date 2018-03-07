@@ -28,9 +28,6 @@ typedef struct pbridge_env {
 
   int pid;
 
-  /* Status */
-  u_char* invok_start;
-
   /* In tracee process memory */
   void *base_addr; // relocated base address
   u_char* page_addr; // mmapped memory
@@ -48,13 +45,13 @@ typedef struct pbridge_function_t {
   struct user_regs_struct working_regs;
   pbridge_pbridge_invok *invok;
   pbridge_env_t *env;
-} pbridge_function_t_t;
+} pbridge_function_t;
 
-inline size_t pbridge_env_text_residual(pbridge_env_t *env) {return env->text_size - env->text_used; }
-inline size_t pbridge_env_data_residual(pbridge_env_t *env) {return env->data_size - env->data_used; }
-inline u_int8_t* pbridge_env_text_start(pbridge_env_t *env) { return &env->page_addr[env->data_size]; }
-inline u_int8_t* pbridge_env_cur_text(pbridge_env_t *env) { return &env->page_addr[env->data_size + env->text_used]; }
+static inline size_t pbridge_env_text_residual(pbridge_env_t *env) { return env->text_size - env->text_used; }
+static inline size_t pbridge_env_data_residual(pbridge_env_t *env) { return env->data_size - env->data_used; }
+static inline u_int8_t* pbridge_env_text_start(pbridge_env_t *env) { return &env->page_addr[env->data_size]; }
+static inline u_int8_t* pbridge_env_cur_text(pbridge_env_t *env) { return &env->page_addr[env->data_size + env->text_used]; }
 
-inline u_int8_t* pbridge_invocation_get_stack(pbridge_pbridge_invok *invok) { return &invok->stack[invok->stack_size - invok->cur_size]; }
+static inline u_int8_t* pbridge_invocation_get_stack(pbridge_pbridge_invok *invok) { return &invok->stack[invok->stack_size - invok->cur_size]; }
 
 #endif

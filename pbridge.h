@@ -27,6 +27,8 @@ int pbridge_env_init(pbridge_env_t *env, pid_t pid, size_t data_size);
 void pbridge_env_destroy(pbridge_env_t *env);
 void pbridge_env_load_reset_text(pbridge_env_t *env);
 void* pbridge_env_malloc(pbridge_env_t *env, size_t size);
+void pbridge_env_print(pbridge_env_t *env);
+void pbridge_env_dump_registers(pbridge_env_t *env);
 
 /* Invocation API */
 pbridge_pbridge_invok* pbridge_init_invocation(size_t stack_size);
@@ -35,11 +37,11 @@ void* pbridge_env_load_invocation(pbridge_env_t *env, pbridge_pbridge_invok *inv
 int pbridge_env_perform_invocation(pbridge_env_t *env, pbridge_pbridge_invok *invok);
 
 /* Function API */
-pbridge_function_t_t* pbridge_init_function(pbridge_env_t *env, void *fn_addr);
-long pbridge_invoke_function(pbridge_function_t_t *func);
-void pbridge_destroy_function(pbridge_function_t_t *func);
+pbridge_function_t* pbridge_init_function(pbridge_env_t *env, void *fn_addr);
+long pbridge_invoke_function(pbridge_function_t *func);
+void pbridge_destroy_function(pbridge_function_t *func);
 
 /* Misc API */
-void* pbridge_env_resolve_symbol_addr(pbridge_env_t *env, const char *sym_name, char sym_type);
+void* pbridge_env_resolve_static_symbol(pbridge_env_t *env, const char *sym_name, char sym_type);
 
 #endif

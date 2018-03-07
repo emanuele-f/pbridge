@@ -57,12 +57,12 @@ static void* ptrace_call_mmap(pid_t pid, void *base_addr, size_t page_size, size
   new_word[3] = 0xe0; // JMP %rax
 
   // insert the SYSCALL instruction into the process, and save the old word
-  if (ptrace_poke_text(pid, rip, new_word, old_word, sizeof(new_word))) {
+  if (pbridge_rw_mem(pid, rip, new_word, old_word, sizeof(new_word))) {
     goto fail;
   }
 
   // insert the SYSCALL instruction into the process, and save the old word
-  if (ptrace_poke_text(pid, rip, new_word, old_word, sizeof(new_word))) {
+  if (pbridge_rw_mem(pid, rip, new_word, old_word, sizeof(new_word))) {
     goto fail;
   }
 
@@ -116,11 +116,11 @@ static void* ptrace_call_mmap(pid_t pid, void *base_addr, size_t page_size, size
 #endif
 
   // restore old word
-  ptrace_poke_text(pid, rip, old_word, NULL, sizeof(old_word));
+  pbridge_rw_mem(pid, rip, old_word, NULL, sizeof(old_word));
   return mmap_memory;
 
 fail:
-  ptrace_poke_text(pid, rip, old_word, NULL, sizeof(old_word));
+  pbridge_rw_mem(pid, rip, old_word, NULL, sizeof(old_word));
   return NULL;
 }
 
@@ -244,7 +244,7 @@ void* pbridge_env_load_invocation(pbridge_env_t *env, pbridge_pbridge_invok *inv
   void *load_addr = pbridge_env_cur_text(env);
 
   // write the process memory
-  if(ptrace_poke_text(env->pid, load_addr, pbridge_invocation_get_stack(invok), NULL, invok->cur_size))
+  if(pbridge_rw_mem(env->pid, load_addr, pbridge_invocation_get_stack(invok), NULL, invok->cur_size))
     return NULL;
 
   env->text_used += invok->cur_size;
@@ -266,14 +266,16 @@ int pbridge_env_perform_invocation(pbridge_env_t *env, pbridge_pbridge_invok *in
 
 /* ******************************************************* */
 
-void* pbridge_env_resolve_symbol_addr(pbridge_env_t *env, const char *sym_name, char sym_type) {
+void* pbridge_env_resolve_static_symbol(pbridge_env_t *env, const char *sym_name, char sym_type) {
   char elf_path[1024] = {0};
 
   if(pbridge_get_process_path(env->pid, elf_path, sizeof(elf_path)) == -1)
     return NULL;
 
-  void *static_addr = find_symbol_static_addr(elf_path, sym_name, 'T');
+  void *static_addr = pbridge_find_static_addr(elf_path, sym_name, sym_type);
   void *relocation_base = env->base_addr;
+
+  if(!static_addr) return NULL;
 
   return (void *)((u_int64_t)relocation_base + (u_int64_t)static_addr);
 }
@@ -297,11 +299,11 @@ void* pbridge_env_malloc(pbridge_env_t *env, size_t size) {
 
 /* ******************************************************* */
 
-pbridge_function_t_t* pbridge_init_function(pbridge_env_t *env, void *fn_addr) {
-  pbridge_function_t_t *new_func;
+pbridge_function_t* pbridge_init_function(pbridge_env_t *env, void *fn_addr) {
+  pbridge_function_t *new_func;
   void *load_addr;
 
-  if((new_func = (pbridge_function_t_t *)calloc(1, sizeof(pbridge_function_t_t))) == NULL) {
+  if((new_func = (pbridge_function_t *)calloc(1, sizeof(pbridge_function_t))) == NULL) {
     perror("calloc");
     return NULL;
   }
@@ -317,6 +319,7 @@ pbridge_function_t_t* pbridge_init_function(pbridge_env_t *env, void *fn_addr) {
   // Configure the invocation
   new_func->invok = pbridge_init_invocation(64);
   if(! new_func->invok) {
+    puts("cannot allocate invocation");
     free(new_func);
     return NULL;
   }
@@ -339,7 +342,7 @@ pbridge_function_t_t* pbridge_init_function(pbridge_env_t *env, void *fn_addr) {
 
 /* ******************************************************* */
 
-long pbridge_invoke_function(pbridge_function_t_t *func) {
+long pbridge_invoke_function(pbridge_function_t *func) {
   struct user_regs_struct regs;
 
   // TODO + supporto both existing invocation and new invocation style call
@@ -367,10 +370,53 @@ long pbridge_invoke_function(pbridge_function_t_t *func) {
 
 /* ******************************************************* */
 
-void pbridge_destroy_function(pbridge_function_t_t *func) {
+void pbridge_destroy_function(pbridge_function_t *func) {
   pbridge_destroy_invocation(func->invok);
 
   // TODO more finalization?
 }
 
+/* ******************************************************* */
 
+void pbridge_env_print(pbridge_env_t *env) {
+  size_t tot_used = env->text_used + env->data_used;
+
+  printf("Env [%p ~ pid=%d, base=%p, @map=%p]\n"
+    "  Size: %lu/%lu\n"
+    "  TextSize: %lu/%lu\n"
+    "  DataSize: %lu/%lu\n",
+    env, env->pid, env->base_addr, env->page_addr,
+    tot_used, env->tot_size,
+    env->text_used, env->text_size,
+    env->data_used, env->data_size);
+
+  if(! tot_used) return;
+
+  void *buf = malloc(max(env->text_used, env->data_used));
+  if(!buf) return;
+
+  if(env->data_used && (pbridge_rw_mem(env->pid, env->page_addr, NULL, buf, env->data_used) == 0)) {
+    puts("  [DATA@map]");
+    pbridge_hexdump(buf, env->data_used);
+  }
+
+  if(env->text_used && (pbridge_rw_mem(env->pid, pbridge_env_text_start(env), NULL, buf, env->text_used) == 0)) {
+    puts("  [TEXT@map]");
+    pbridge_hexdump(buf, env->text_used);
+  }
+
+  free(buf);
+}
+
+/* ******************************************************* */
+
+void pbridge_env_dump_registers(pbridge_env_t *env) {
+  struct user_regs_struct regs;
+
+  if (ptrace(PTRACE_GETREGS, env->pid, NULL, &regs)) {
+    perror("PTRACE_GETREGS");
+    return;
+  }
+
+  pbridge_dump_registers(&regs);
+}
