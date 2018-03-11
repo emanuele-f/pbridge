@@ -1,5 +1,5 @@
 CFLAGS := -std=gnu99 -Wall -fPIC -g -I.. -L..
-LDLIBS := -lpbridge -lcapstone
+LDLIBS := -lpbridge -lcapstone -lpthread
 
 OBJS = $(SOURCES:.c=.o)
 EXECUTABLES = invoke_exported_function target replace_call

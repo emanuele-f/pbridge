@@ -86,14 +86,8 @@ int main(int argc, char **argv) {
   pid_t pid = atoi(argv[1]);
 
   // attach
-  if (ptrace(PTRACE_ATTACH, pid, NULL, NULL)) {
+  if (pbridge_attach_all(pid)) {
     perror("PTRACE_ATTACH");
-    return -1;
-  }
-
-  // wait for the process to actually stop
-  if (waitpid(pid, 0, WSTOPPED) == -1) {
-    perror("wait");
     return -1;
   }
 
@@ -126,7 +120,7 @@ int main(int argc, char **argv) {
   pbridge_env_destroy(&prog_env);
 
   /* *** */
-  if (ptrace(PTRACE_DETACH, pid, NULL, NULL)) {
+  if (pbridge_detach_all(pid)) {
     perror("PTRACE_DETACH");
     return -1;
   }

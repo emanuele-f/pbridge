@@ -32,12 +32,16 @@ int pbridge_wait_process(const char *name);
 int pbridge_singlestep(pid_t pid);
 int pbridge_rw_mem(pid_t pid, const void *where, const void *new_text, void *old_text,
             size_t len);
+int pbridge_attach_all(pid_t pid);
+int pbridge_detach_all(pid_t pid);
 
-/* Misc */
+/* Lookup */
 void* pbridge_find_static_symbol_addr(const char *elf_path, const char *sym_name, char sym_type);
 void* pbridge_find_got_symbol_addr(const char *elf_path, const char *sym_name);
 void* pbridge_get_text_relocation_base_addr(pid_t pid);
 int pbridge_get_process_path(pid_t pid, char *buf, size_t bufsize);
+
+/* Utils */
 int pbridge_disassemble(void *code, size_t code_size);
 void pbridge_hexdump(const void* data, size_t size);
 void pbridge_dump_registers(const struct user_regs_struct *regs);

@@ -21,6 +21,8 @@
 #include <inttypes.h>
 #include <capstone/capstone.h>
 
+#include <dirent.h>
+
 /* ******************************************************* */
 
 void* pbridge_find_static_symbol_addr(const char *elf_path, const char *sym_name, char sym_type) {
@@ -245,6 +247,66 @@ int pbridge_get_process_path(pid_t pid, char *buf, size_t bufsize) {
   }
 
   return -1;
+}
+
+/* ******************************************************* */
+
+// callback: return 0 on success, other on error (stops iteration)
+static int foreach_thread_in_process(pid_t pid, int (callback) (pid_t tid)) {
+  char proc_tasks[32];
+  DIR *dir;
+  struct dirent *dirent;
+  int rv;
+
+  snprintf(proc_tasks, sizeof(proc_tasks), "/proc/%d/task", pid);
+
+  if((dir = opendir(proc_tasks))) {
+    while((dirent = readdir(dir))) {
+      if(dirent->d_name[0] != '.') {
+        errno = 0;
+        int tid = (int) strtol(dirent->d_name, NULL, 10);
+
+        if(!errno) {
+          if((rv = callback(tid)))
+          break;
+        }
+      }
+    }
+
+    closedir(dir);
+  } else {
+    perror("opendir");
+    rv = -1;
+  }
+
+  return rv;
+}
+
+static int thread_attach_callback(pid_t tid) {
+  if(ptrace(PTRACE_ATTACH, tid, NULL, NULL)) {
+    perror("attach");
+    return -1;
+  }
+
+  // wait for the thread to actually stop
+  if (waitpid(tid, 0, WSTOPPED) == -1) {
+    perror("wait");
+    return -1;
+  }
+
+  return 0;
+}
+
+int pbridge_attach_all(pid_t pid) {
+  return foreach_thread_in_process(pid, thread_attach_callback);
+}
+
+static int thread_detach_callback(pid_t tid) {
+  return ptrace(PTRACE_DETACH, tid, NULL, NULL);
+}
+
+int pbridge_detach_all(pid_t pid) {
+  return foreach_thread_in_process(pid, thread_detach_callback);
 }
 
 /* ******************************************************* */
