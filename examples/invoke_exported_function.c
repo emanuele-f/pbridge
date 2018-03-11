@@ -62,7 +62,10 @@ static int callme(const void *message) {
   // Write message into process memory
   pbridge_rw_mem(prog_env.pid, callme_def.message_buf, message, NULL, min(CALLME_STRING_BUF_SIZE, strlen(message)+1));
 
-  return (int) pbridge_invoke_function(callme_def.base);
+  long rv;
+
+  pbridge_invoke_function(callme_def.base, &rv);
+  return (int)rv;
 }
 
 /* ******************************************************* */
@@ -121,8 +124,13 @@ int main(int argc, char **argv) {
   finalize_callme();
 
   pbridge_env_destroy(&prog_env);
-  /* *** */
 
-  terminate_process(pid);
+  /* *** */
+  if (ptrace(PTRACE_DETACH, pid, NULL, NULL)) {
+    perror("PTRACE_DETACH");
+    return -1;
+  }
+
+  //terminate_process(pid);
   return 0;
 }

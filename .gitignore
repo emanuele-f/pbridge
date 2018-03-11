@@ -1,4 +1,5 @@
 *.o
 *.a
-example
-target
+examples/target
+examples/invoke_exported_function
+examples/replace_call

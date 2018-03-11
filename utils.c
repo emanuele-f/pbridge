@@ -18,16 +18,26 @@
 
 #include "includes.h"
 
-// Do not worry about alignment for now -> this is a bug, may overflow
-#define SKIP_ALIGNMENT_CHECK
+#include <inttypes.h>
+#include <capstone/capstone.h>
 
 /* ******************************************************* */
 
-void* pbridge_find_static_addr(const char *elf_path, const char *sym_name, char sym_type) {
+void* pbridge_find_static_symbol_addr(const char *elf_path, const char *sym_name, char sym_type) {
   void *addr = NULL;
-  char *cmd = calloc(strlen(elf_path) + 4, 1);
-  char *lookup = calloc(strlen(sym_name) + 5, 1);
-  if(! cmd) return NULL;
+
+  char *cmd = calloc(1, strlen(elf_path) + 4); // nm cmd + NULL
+  if(!cmd) {
+    perror("calloc");
+    return NULL;
+  }
+
+  char *lookup = calloc(1, strlen(sym_name) + 5); // lookup string + NULL
+  if(!lookup) {
+    perror("calloc");
+    free(cmd);
+    return NULL;
+  }
 
   sprintf(cmd, "nm %s", elf_path);
   sprintf(lookup, " %c %s\n", sym_type, sym_name);
@@ -49,9 +59,66 @@ void* pbridge_find_static_addr(const char *elf_path, const char *sym_name, char 
     }
 
     pclose(f);
-  }
+  } else
+    perror("pbridge_find_static_symbol_addr popen");
 
   free(cmd);
+  free(lookup);
+  return addr;
+}
+
+/* ******************************************************* */
+
+void* pbridge_find_got_symbol_addr(const char *elf_path, const char *sym_name) {
+  void *addr = NULL;
+
+  char *cmd = calloc(1, strlen(elf_path) + 12); // objdump cmd + NULL
+  if(!cmd) {
+    perror("calloc");
+    return NULL;
+  }
+
+  char *lookup = calloc(1, strlen(sym_name) + 22); // lookup string + NULL
+  if(!lookup) {
+    perror("calloc");
+    free(cmd);
+    return NULL;
+  }
+
+  // ensure exact match
+  if(! strchr(sym_name, '@')) {
+    printf("symbol %s must contain a reference to a dynamic library e.g. %s@GLIBC\n", sym_name, sym_name);
+    return NULL;
+  }
+
+  sprintf(cmd, "objdump -R %s", elf_path);
+  sprintf(lookup, " R_X86_64_JUMP_SLOT  %s", sym_name);
+
+  FILE *f = popen(cmd, "r");
+
+  if(f) {
+    char line[256];
+
+    while(! feof(f)) {
+      if(fgets(line, sizeof(line), f) && strstr(line, lookup) && (strlen(line) > 22)) {
+        line[16] = '\0';
+
+        errno = 0;
+        addr = (void *) strtoll(line, NULL, 16);
+        if(errno == ERANGE) {
+          printf("Address '%s' is out of range\n", line);
+          addr = 0;
+        }
+        break;
+      }
+    }
+
+    pclose(f);
+  } else
+    perror("pbridge_find_got_symbol_addr popen");
+
+  free(cmd);
+  free(lookup);
   return addr;
 }
 
@@ -62,20 +129,16 @@ void* pbridge_find_static_addr(const char *elf_path, const char *sym_name, char 
 //
 // Update the text area of pid at the area starting at where. The data copied
 // should be in the new_text buffer whose size is given by len. If old_text is
-// not null, the original text data will be copied into it. Therefore old_text
-// must have the same size as new_text.
+// not null, the original text data will be copied into it. If new_text is not new,
+// the new text is copied.
 int pbridge_rw_mem(pid_t pid, const void *where, const void *new_text, void *old_text,
               size_t len) {
-#ifndef SKIP_ALIGNMENT_CHECK
-  if (len % sizeof(void *) != 0) {
-    printf("invalid len, not a multiple of %zd\n", sizeof(void *));
-    return -1;
-  }
-#endif
-
   long poke_data;
-  for (size_t copied = 0; copied < len; copied += sizeof(poke_data)) {
-    if(new_text) memmove(&poke_data, new_text + copied, sizeof(poke_data));
+  size_t blocksize = sizeof(poke_data);
+
+  for (size_t copied = 0; copied < len; copied += blocksize) {
+    blocksize = min(blocksize, len-copied);
+    if(new_text) memmove(&poke_data, new_text + copied, blocksize);
 
     if (old_text != NULL) {
       errno = 0;
@@ -84,7 +147,7 @@ int pbridge_rw_mem(pid_t pid, const void *where, const void *new_text, void *old
         perror("PTRACE_PEEKTEXT");
         return -1;
       }
-      memmove(old_text + copied, &peek_data, sizeof(peek_data));
+      memmove(old_text + copied, &peek_data, blocksize);
     }
 
     if(new_text) {
@@ -94,6 +157,7 @@ int pbridge_rw_mem(pid_t pid, const void *where, const void *new_text, void *old
       }
     }
   }
+
   return 0;
 }
 
@@ -213,6 +277,33 @@ void pbridge_hexdump(const void* data, size_t size) {
       }
     }
   }
+}
+
+/* ******************************************************* */
+
+int pbridge_disassemble(void *code, size_t code_size) {
+  csh handle;
+  cs_insn *insn;
+
+  size_t count;
+
+  if(cs_open(CS_ARCH_X86, CS_MODE_64, &handle) != CS_ERR_OK)
+    return -1;
+
+  count = cs_disasm(handle, code, code_size, 0, 0, &insn);
+
+  if (count > 0) {
+    size_t j;
+
+    for (j = 0; j < count; j++)
+      printf("0x%"PRIx64":\t%s\t\t%s\n", (ulong)code + insn[j].address, insn[j].mnemonic, insn[j].op_str);
+
+    cs_free(insn, count);
+  } else
+    printf("ERROR: Failed to disassemble given code!\n");
+
+  cs_close(&handle);
+  return 0;
 }
 
 /* ******************************************************* */

@@ -29,17 +29,13 @@
 /* ******************************************************* */
 
 /* Performs a call to mmap on ptrace */
-static void* ptrace_call_mmap(pid_t pid, void *base_addr, size_t page_size, size_t data_size) {
-  struct user_regs_struct oldregs, newregs;
+static void* ptrace_call_mmap(pid_t pid, void *base_addr, size_t page_size,
+            size_t data_size, const struct user_regs_struct *oldregs) {
+  struct user_regs_struct newregs;
 
-  if (ptrace(PTRACE_GETREGS, pid, NULL, &oldregs)) {
-    perror("PTRACE_GETREGS");
-    return NULL;
-  }
+  void *rip = (void *)oldregs->rip;
 
-  void *rip = (void *)oldregs.rip;
-
-  memmove(&newregs, &oldregs, sizeof(newregs));
+  memcpy(&newregs, oldregs, sizeof(newregs));
   newregs.rax = 9;                           // mmap
   // note: we request a page near to the original text segment to work with rel jumps
   newregs.rdi = (long) (base_addr - getpagesize()); // addr
@@ -55,11 +51,6 @@ static void* ptrace_call_mmap(pid_t pid, void *base_addr, size_t page_size, size
   new_word[1] = 0x05; // SYSCALL
   new_word[2] = 0xff; // JMP %rax
   new_word[3] = 0xe0; // JMP %rax
-
-  // insert the SYSCALL instruction into the process, and save the old word
-  if (pbridge_rw_mem(pid, rip, new_word, old_word, sizeof(new_word))) {
-    goto fail;
-  }
 
   // insert the SYSCALL instruction into the process, and save the old word
   if (pbridge_rw_mem(pid, rip, new_word, old_word, sizeof(new_word))) {
@@ -126,6 +117,57 @@ fail:
 
 /* ******************************************************* */
 
+static int ptrace_call_unmap(pid_t pid, void *page_addr, size_t page_size, const struct user_regs_struct *oldregs) {
+  struct user_regs_struct newregs;
+
+  void *rip = (void *)oldregs->rip;
+
+  memcpy(&newregs, oldregs, sizeof(newregs));
+
+  uint8_t old_word[8] = {0};
+  uint8_t new_word[8] = {0};
+  new_word[0] = 0x0f; // SYSCALL
+  new_word[1] = 0x05; // SYSCALL
+  new_word[2] = 0xff; // JMP %rax
+  new_word[3] = 0xe0; // JMP %rax
+
+  // insert the SYSCALL instruction into the process, and save the old word
+  if (pbridge_rw_mem(pid, rip, new_word, old_word, sizeof(new_word)))
+    goto fail;
+
+  newregs.rax = 11;                // munmap
+  newregs.rdi = (long)page_addr;   // addr
+  newregs.rsi = page_size;         // size
+  if (ptrace(PTRACE_SETREGS, pid, NULL, &newregs)) {
+    perror("PTRACE_SETREGS");
+    goto fail;
+  }
+
+  // make the system call
+  if (pbridge_singlestep(pid))
+    goto fail;
+
+  if (ptrace(PTRACE_GETREGS, pid, NULL, &newregs)) {
+    perror("PTRACE_GETREGS");
+    goto fail;
+  }
+
+  if(newregs.rax != 0) {
+    perror("munmap error");
+    goto fail;
+  }
+
+  // restore old word
+  pbridge_rw_mem(pid, rip, old_word, NULL, sizeof(old_word));
+  return 0;
+
+fail:
+  pbridge_rw_mem(pid, rip, old_word, NULL, sizeof(old_word));
+  return -1;
+}
+
+/* ******************************************************* */
+
 static int32_t compute_reljump_32(void *from, void *to) {
   int64_t delta = (int64_t)to - (int64_t)from - REL32_SZ;
 
@@ -148,8 +190,13 @@ int pbridge_env_init(pbridge_env_t *env, pid_t pid, size_t data_size) {
   if(data_size > page_size)
     return -1;
 
+  if (ptrace(PTRACE_GETREGS, pid, NULL, &env->origin_regs)) {
+    perror("PTRACE_GETREGS");
+    return -1;
+  }
+
   env->base_addr = pbridge_get_text_relocation_base_addr(pid);
-  env->page_addr = ptrace_call_mmap(pid, env->base_addr, page_size, data_size);
+  env->page_addr = ptrace_call_mmap(pid, env->base_addr, page_size, data_size, &env->origin_regs);
 
   if(!env->page_addr) return -1;
 
@@ -168,8 +215,22 @@ int pbridge_env_init(pbridge_env_t *env, pid_t pid, size_t data_size) {
 
 /* ******************************************************* */
 
-void pbridge_env_destroy(pbridge_env_t *env) {
-  // TODO removed memmaped and possibly restore eip/registers
+int pbridge_env_destroy(pbridge_env_t *env) {
+  // Got back on the main text page
+  if (ptrace(PTRACE_SETREGS, env->pid, NULL, &env->origin_regs)) {
+    perror("PTRACE_SETREGS");
+    return -1;
+  }
+
+  ptrace_call_unmap(env->pid, env->page_addr, env->tot_size, &env->origin_regs);
+
+  // Restore the registers after the unmap
+  if (ptrace(PTRACE_SETREGS, env->pid, NULL, &env->origin_regs)) {
+    perror("PTRACE_SETREGS");
+    return -1;
+  }
+
+  return 0;
 }
 
 /* ******************************************************* */
@@ -228,12 +289,49 @@ static void ptrace_invocation_set_jump_offset(pbridge_pbridge_invok *invok, u_in
 
 /* ******************************************************* */
 
-/* Insert the invocation in the callee process and returns its load address */
-void* pbridge_env_load_invocation(pbridge_env_t *env, pbridge_pbridge_invok *invok, void *fnaddr) {
-  if(invok->cur_size > pbridge_env_text_residual(env))
+int pbridge_env_disassemble(pbridge_env_t *env, void *addr, size_t size) {
+  void *buffer = malloc(size);
+  int rv = 0;
+
+  if(! buffer) {
+    perror("malloc");
+    return -1;
+  }
+
+  if (pbridge_rw_mem(env->pid, addr, NULL, buffer, size))
+    rv = -1;
+  else
+    rv = pbridge_disassemble(buffer, size);
+
+  free(buffer);
+  return rv;
+}
+
+/* ******************************************************* */
+
+void* pbridge_env_insert_payload(pbridge_env_t *env, void *payload, size_t payload_size) {
+  if(payload_size > pbridge_env_text_residual(env))
     return NULL;
 
+  void *load_addr = pbridge_env_cur_text(env);
+
+  // write the process memory
+  if(pbridge_rw_mem(env->pid, load_addr, payload, NULL, payload_size))
+    return NULL;
+
+  env->text_used += payload_size;
+
+  return load_addr;
+}
+
+/* ******************************************************* */
+
+/* Insert the invocation in the callee process and returns its load address */
+void* pbridge_env_load_invocation(pbridge_env_t *env, pbridge_pbridge_invok *invok, void *fnaddr) {
   ptrace_invocation_align_8(invok);
+
+  if(invok->cur_size > pbridge_env_text_residual(env))
+    return NULL;
 
   // calculate the jump offset relative the current text position
   u_int32_t jump_offset = compute_reljump_32(pbridge_env_cur_text(env), fnaddr);
@@ -241,14 +339,7 @@ void* pbridge_env_load_invocation(pbridge_env_t *env, pbridge_pbridge_invok *inv
   jump_offset -= invok->cur_size - STACK_FOOTER_SZ;
   ptrace_invocation_set_jump_offset(invok, jump_offset);
 
-  void *load_addr = pbridge_env_cur_text(env);
-
-  // write the process memory
-  if(pbridge_rw_mem(env->pid, load_addr, pbridge_invocation_get_stack(invok), NULL, invok->cur_size))
-    return NULL;
-
-  env->text_used += invok->cur_size;
-  return load_addr;
+  return pbridge_env_insert_payload(env, pbridge_invocation_get_stack(invok), invok->cur_size);
 }
 
 /* ******************************************************* */
@@ -272,12 +363,41 @@ void* pbridge_env_resolve_static_symbol(pbridge_env_t *env, const char *sym_name
   if(pbridge_get_process_path(env->pid, elf_path, sizeof(elf_path)) == -1)
     return NULL;
 
-  void *static_addr = pbridge_find_static_addr(elf_path, sym_name, sym_type);
+  void *static_addr = pbridge_find_static_symbol_addr(elf_path, sym_name, sym_type);
   void *relocation_base = env->base_addr;
 
   if(!static_addr) return NULL;
 
   return (void *)((u_int64_t)relocation_base + (u_int64_t)static_addr);
+}
+
+/* ******************************************************* */
+
+void* pbridge_env_get_symbol_got_entry(pbridge_env_t *env, const char *sym_name) {
+  char elf_path[1024] = {0};
+
+  if(pbridge_get_process_path(env->pid, elf_path, sizeof(elf_path)) == -1)
+    return NULL;
+
+  void *got_addr = pbridge_find_got_symbol_addr(elf_path, sym_name);
+  void *relocation_base = env->base_addr;
+
+  if(!got_addr) return NULL;
+
+  return (void *)((u_int64_t)relocation_base + (u_int64_t)got_addr);
+}
+
+/* ******************************************************* */
+
+/* useful for injection */
+void* pbridge_env_overwrite_dynamic_symbol_addr(pbridge_env_t *env, const char *sym_name, void *new_addr) {
+  void *got_addr = pbridge_env_get_symbol_got_entry(env, sym_name);
+  if(!got_addr) return NULL;
+
+  if(pbridge_rw_mem(env->pid, got_addr, &new_addr, NULL, sizeof(new_addr)) != 0)
+    return NULL;
+
+  return got_addr;
 }
 
 /* ******************************************************* */
@@ -342,7 +462,7 @@ pbridge_function_t* pbridge_init_function(pbridge_env_t *env, void *fn_addr) {
 
 /* ******************************************************* */
 
-long pbridge_invoke_function(pbridge_function_t *func) {
+int pbridge_invoke_function(pbridge_function_t *func, long *rv) {
   struct user_regs_struct regs;
 
   // TODO + supporto both existing invocation and new invocation style call
@@ -354,7 +474,7 @@ long pbridge_invoke_function(pbridge_function_t *func) {
   }
 
   if(pbridge_env_perform_invocation(func->env, func->invok) != 0) {
-    perror("pbridge_env_perform_invocation");
+    //perror("pbridge_env_perform_invocation");
     return -1;
   }
 
@@ -363,9 +483,9 @@ long pbridge_invoke_function(pbridge_function_t *func) {
     perror("PTRACE_GETREGS");
     return -1;
   }
-  long rv = regs.rax;
 
-  return rv;
+  if(rv) *rv = regs.rax;
+  return 0;
 }
 
 /* ******************************************************* */
@@ -402,7 +522,7 @@ void pbridge_env_print(pbridge_env_t *env) {
 
   if(env->text_used && (pbridge_rw_mem(env->pid, pbridge_env_text_start(env), NULL, buf, env->text_used) == 0)) {
     puts("  [TEXT@map]");
-    pbridge_hexdump(buf, env->text_used);
+    pbridge_disassemble(buf, env->text_used);
   }
 
   free(buf);

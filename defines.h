@@ -19,6 +19,8 @@
 #ifndef _DEFINES_H_
 #define _DEFINES_H_
 
+#include <sys/user.h>
+
 typedef struct pbridge_env {
   size_t tot_size;
   size_t text_size;
@@ -27,6 +29,7 @@ typedef struct pbridge_env {
   size_t data_used;
 
   int pid;
+  struct user_regs_struct origin_regs;
 
   /* In tracee process memory */
   void *base_addr; // relocated base address

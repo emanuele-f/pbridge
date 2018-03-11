@@ -1,25 +1,25 @@
 CFLAGS := -std=gnu99 -Wall -fPIC -g
 
-PBRIDGE_LIB = pbridge.a
+PBRIDGE_LIB = libpbridge.a
 SOURCES = pbridge.c utils.c
 HEADERS = pbridge.h utils.h includes.h defines.h
 OBJS = $(SOURCES:.c=.o)
-EXECUTABLES = example target license
+EXECUTABLES = license
+LDLIBS := -lcapstone
 
-.PHONY: all
-all: ${PBRIDGE_LIB} $(EXECUTABLES)
+.PHONY: all clean examples
+all: ${PBRIDGE_LIB} $(EXECUTABLES) examples
+
+examples:
+	cd examples && make
 
 clean:
 	rm -f *.o ${PBRIDGE_LIB} $(EXECUTABLES)
+	cd examples && make clean
 
 $(PBRIDGE_LIB): $(OBJS)
 	ar rcs ${PBRIDGE_LIB} $(OBJS)
-
-example: example.c $(PBRIDGE_LIB)
-	$(CC) $(CFLAGS) -o $@ $^
+	cd examples && make clean
 
 license: license.c $(PBRIDGE_LIB)
-	$(CC) $(CFLAGS) -o $@ $^
-
-target: target.c
-	$(CC) $(CFLAGS) -o $@ $^
+	$(CC) $(CFLAGS) $(LDLIBS) -o $@ $^
