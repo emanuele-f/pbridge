@@ -44,7 +44,6 @@ typedef struct pbridge_invok {
 } pbridge_pbridge_invok;
 
 typedef struct pbridge_function_t {
-  //struct user_regs_struct origin_regs;
   struct user_regs_struct working_regs;
   pbridge_pbridge_invok *invok;
   pbridge_env_t *env;

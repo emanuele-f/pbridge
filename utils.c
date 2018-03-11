@@ -126,33 +126,57 @@ void* pbridge_find_got_symbol_addr(const char *elf_path, const char *sym_name) {
 
 /* ******************************************************* */
 
-//
-// From https://github.com/eklitzke/ptrace-call-userspace
-//
-// Update the text area of pid at the area starting at where. The data copied
-// should be in the new_text buffer whose size is given by len. If old_text is
-// not null, the original text data will be copied into it. If new_text is not new,
-// the new text is copied.
+/*
+ * From https://github.com/eklitzke/ptrace-call-userspace
+ *
+ * Read/Write a process memory.
+ *
+ * where: process memory start address
+ * new_text: if not NULL, new data to write
+ * old_text: if not NULL, will contain the data read
+ * len: number of bytes to write.
+ *
+ * NOTE: both *where* and *len* parameters should be aligned to a 64bit bound.
+ * This is not enforced by the code, but a misaligned address may cause a segfault
+ * in the rare case when the write appears at the bound of the memory pages space
+ * allocated for the process.
+ */
 int pbridge_rw_mem(pid_t pid, const void *where, const void *new_text, void *old_text,
               size_t len) {
-  long poke_data;
+  long peek_data, poke_data;
   size_t blocksize = sizeof(poke_data);
+  int last_unaligned_block;
 
   for (size_t copied = 0; copied < len; copied += blocksize) {
+    last_unaligned_block = blocksize > len-copied;
     blocksize = min(blocksize, len-copied);
-    if(new_text) memmove(&poke_data, new_text + copied, blocksize);
 
-    if (old_text != NULL) {
+    if(new_text)
+      memmove(&poke_data, new_text + copied, blocksize);
+
+    if (old_text || last_unaligned_block) {
       errno = 0;
-      long peek_data = ptrace(PTRACE_PEEKTEXT, pid, where + copied, NULL);
+      peek_data = ptrace(PTRACE_PEEKTEXT, pid, where + copied, NULL);
+
       if (peek_data == -1 && errno) {
         perror("PTRACE_PEEKTEXT");
         return -1;
       }
-      memmove(old_text + copied, &peek_data, blocksize);
+
+      if(old_text)
+        memmove(old_text + copied, &peek_data, blocksize);
     }
 
     if(new_text) {
+      if(last_unaligned_block) {
+        // this is the last block, and it is unaligned. We must avoid
+        // overwriting the data next to it. We use the peek_data read before
+        int offset = len % sizeof(poke_data);
+        int to_keep = sizeof(poke_data) - offset;
+
+        memmove(((u_int8_t *) &poke_data) + offset, ((u_int8_t *) &peek_data) + offset, to_keep);
+      }
+
       if (ptrace(PTRACE_POKETEXT, pid, where + copied, (void *)poke_data) < 0) {
         perror("PTRACE_POKETEXT");
         return -1;
@@ -243,6 +267,14 @@ int pbridge_get_process_path(pid_t pid, char *buf, size_t bufsize) {
 
   if(readlink(proc_path, buf, bufsize) != -1) {
     buf[bufsize-1] = '\0';
+
+    const char strip_string[] = " (deleted)";
+    char *found;
+
+    // possibly remove ending (deleted) string
+    if((found = strstr(buf, strip_string)) && (found + sizeof(strip_string)-1 == buf + strlen(buf)))
+      *found = '\0';
+
     return 0;
   }
 

@@ -3,3 +3,4 @@
 examples/target
 examples/invoke_exported_function
 examples/replace_call
+examples/write_test

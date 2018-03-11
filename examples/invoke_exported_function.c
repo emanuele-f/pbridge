@@ -25,6 +25,7 @@
 #include <sys/types.h>
 #include <sys/user.h>
 #include <sys/wait.h>
+#include <libgen.h>
 
 #include "pbridge.h"
 
@@ -79,7 +80,7 @@ static void terminate_process(pid_t pid) {
 
 int main(int argc, char **argv) {
   if(argc < 2) {
-    puts("Bad args");
+    printf("Usage: %s pid\n", basename(argv[0]));
     exit(1);
   }
 
