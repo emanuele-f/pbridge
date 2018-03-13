@@ -35,7 +35,7 @@ typedef struct callme_function {
   void *message_buf;
 } callme_function_t;
 
-static pbridge_env_t prog_env;
+static pbridge_env_t *prog_env;
 static callme_function_t callme_def;
 
 #define CALLME_STRING_BUF_SIZE 128
@@ -43,7 +43,7 @@ static callme_function_t callme_def;
 /* ******************************************************* */
 
 static int setup_callme(void *fn_addr) {
-  callme_def.base = pbridge_init_function(&prog_env, fn_addr);
+  callme_def.base = pbridge_func_init(prog_env, fn_addr);
   if(! callme_def.base) return -1;
 
   // TODO make generic parameters
@@ -54,18 +54,18 @@ static int setup_callme(void *fn_addr) {
 }
 
 static void finalize_callme() {
-  pbridge_destroy_function(callme_def.base);
+  pbridge_func_destroy(callme_def.base);
 }
 
 /* ******************************************************* */
 
 static int callme(const void *message) {
   // Write message into process memory
-  pbridge_rw_mem(prog_env.pid, callme_def.message_buf, message, NULL, min(CALLME_STRING_BUF_SIZE, strlen(message)+1));
+  pbridge_rw_mem(prog_env->pid, callme_def.message_buf, message, NULL, min(CALLME_STRING_BUF_SIZE, strlen(message)+1));
 
   long rv;
 
-  pbridge_invoke_function(callme_def.base, &rv);
+  pbridge_func_invoke(callme_def.base, &rv);
   return (int)rv;
 }
 
@@ -93,15 +93,15 @@ int main(int argc, char **argv) {
   }
 
   /* *** */
-  if(pbridge_env_init(&prog_env, pid, 512) != 0) {
+  if(!(prog_env = pbridge_env_init(pid, 512))) {
     terminate_process(pid);
     return -1;
   }
 
-  callme_def.message_buf = pbridge_env_malloc(&prog_env, CALLME_STRING_BUF_SIZE);
+  callme_def.message_buf = pbridge_env_malloc(prog_env, CALLME_STRING_BUF_SIZE);
   printf("Allocated a %d bytes buffer at %p\n", CALLME_STRING_BUF_SIZE, callme_def.message_buf);
 
-  void *fn_addr = pbridge_env_resolve_static_symbol(&prog_env, "callme", 'T');
+  void *fn_addr = pbridge_env_resolve_static_symbol(prog_env, "callme", 'T');
   if(! fn_addr) {
     puts("Cannot get callme address");
     terminate_process(pid);
@@ -118,7 +118,7 @@ int main(int argc, char **argv) {
 
   finalize_callme();
 
-  pbridge_env_destroy(&prog_env);
+  pbridge_env_destroy(prog_env);
 
   /* *** */
   if (pbridge_detach_all(pid)) {

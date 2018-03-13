@@ -42,7 +42,7 @@ void* pbridge_get_text_relocation_base_addr(pid_t pid);
 int pbridge_get_process_path(pid_t pid, char *buf, size_t bufsize);
 
 /* Utils */
-int pbridge_disassemble(void *code, size_t code_size);
+int pbridge_disassemble(void *code, size_t code_size, void *base_addr);
 void pbridge_hexdump(const void* data, size_t size);
 void pbridge_dump_registers(const struct user_regs_struct *regs);
 

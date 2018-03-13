@@ -183,34 +183,40 @@ static int32_t compute_reljump_32(void *from, void *to) {
 /* ******************************************************* */
 
 /* Initialize a ptrace environment */
-int pbridge_env_init(pbridge_env_t *env, pid_t pid, size_t data_size) {
+pbridge_env_t* pbridge_env_init(pid_t pid, size_t data_size) {
   const size_t page_size = getpagesize();
-  memset(env, 0, sizeof(pbridge_env_t));
 
   if(data_size > page_size)
-    return -1;
+    return NULL;
+
+  pbridge_env_t *env = calloc(1, sizeof(pbridge_env_t));
+  if(! env) {
+    perror("malloc");
+    return NULL;
+  }
 
   if (ptrace(PTRACE_GETREGS, pid, NULL, &env->origin_regs)) {
     perror("PTRACE_GETREGS");
-    return -1;
+    free(env);
+    return NULL;
   }
 
   env->base_addr = pbridge_get_text_relocation_base_addr(pid);
   env->page_addr = ptrace_call_mmap(pid, env->base_addr, page_size, data_size, &env->origin_regs);
 
-  if(!env->page_addr) return -1;
+  if(!env->page_addr) {
+    free(env);
+    return NULL;
+  }
 
   printf("Mapped %lu B memory at %p\n", page_size, env->page_addr);
-
-  if(! env->page_addr)
-    return -1;
 
   env->pid = pid;
   env->tot_size = page_size;
   env->data_size = data_size;
   env->text_size = env->tot_size - env->data_size;
 
-  return 0;
+  return env;
 }
 
 /* ******************************************************* */
@@ -230,6 +236,7 @@ int pbridge_env_destroy(pbridge_env_t *env) {
     return -1;
   }
 
+  free(env);
   return 0;
 }
 
@@ -283,7 +290,7 @@ static void ptrace_invocation_align_8(pbridge_pbridge_invok *invok) {
 /* ******************************************************* */
 
 static void ptrace_invocation_set_jump_offset(pbridge_pbridge_invok *invok, u_int32_t jump_offset) {
-  printf("RELJUMP: 0x%x\n", jump_offset);
+  //printf("RELJUMP: 0x%x\n", jump_offset);
   memcpy(&invok->stack[invok->stack_size-STACK_FOOTER_SZ+1], &jump_offset, REL32_SZ-1);
 }
 
@@ -301,7 +308,7 @@ int pbridge_env_disassemble(pbridge_env_t *env, void *addr, size_t size) {
   if (pbridge_rw_mem(env->pid, addr, NULL, buffer, size))
     rv = -1;
   else
-    rv = pbridge_disassemble(buffer, size);
+    rv = pbridge_disassemble(buffer, size, addr);
 
   free(buffer);
   return rv;
@@ -419,7 +426,7 @@ void* pbridge_env_malloc(pbridge_env_t *env, size_t size) {
 
 /* ******************************************************* */
 
-pbridge_function_t* pbridge_init_function(pbridge_env_t *env, void *fn_addr) {
+pbridge_function_t* pbridge_func_init(pbridge_env_t *env, void *fn_addr) {
   pbridge_function_t *new_func;
   void *load_addr;
 
@@ -462,7 +469,7 @@ pbridge_function_t* pbridge_init_function(pbridge_env_t *env, void *fn_addr) {
 
 /* ******************************************************* */
 
-int pbridge_invoke_function(pbridge_function_t *func, long *rv) {
+int pbridge_func_invoke(pbridge_function_t *func, long *rv) {
   struct user_regs_struct regs;
 
   // TODO + supporto both existing invocation and new invocation style call
@@ -490,7 +497,7 @@ int pbridge_invoke_function(pbridge_function_t *func, long *rv) {
 
 /* ******************************************************* */
 
-void pbridge_destroy_function(pbridge_function_t *func) {
+void pbridge_func_destroy(pbridge_function_t *func) {
   pbridge_destroy_invocation(func->invok);
 
   // TODO more finalization?
@@ -522,10 +529,24 @@ void pbridge_env_print(pbridge_env_t *env) {
 
   if(env->text_used && (pbridge_rw_mem(env->pid, pbridge_env_text_start(env), NULL, buf, env->text_used) == 0)) {
     puts("  [TEXT@map]");
-    pbridge_disassemble(buf, env->text_used);
+    pbridge_disassemble(buf, env->text_used, pbridge_env_text_start(env));
   }
 
   free(buf);
+}
+
+/* ******************************************************* */
+
+void pbridge_env_status(pbridge_env_t *env) {
+  struct user_regs_struct regs;
+
+  if (ptrace(PTRACE_GETREGS, env->pid, NULL, &regs)) {
+    perror("PTRACE_GETREGS");
+    return;
+  }
+
+  pbridge_env_dump_registers(env);
+  pbridge_env_disassemble(env, (void *)regs.rip, 20);
 }
 
 /* ******************************************************* */

@@ -23,11 +23,12 @@
 #include "utils.h"
 
 /* Environment API */
-int pbridge_env_init(pbridge_env_t *env, pid_t pid, size_t data_size);
+pbridge_env_t* pbridge_env_init(pid_t pid, size_t data_size);
 int pbridge_env_destroy(pbridge_env_t *env);
 void pbridge_env_load_reset_text(pbridge_env_t *env);
 void* pbridge_env_malloc(pbridge_env_t *env, size_t size);
 void pbridge_env_print(pbridge_env_t *env);
+void pbridge_env_status(pbridge_env_t *env);
 void pbridge_env_dump_registers(pbridge_env_t *env);
 int pbridge_env_disassemble(pbridge_env_t *env, void*addr, size_t size);
 void* pbridge_env_insert_payload(pbridge_env_t *env, void *payload, size_t payload_size);
@@ -39,9 +40,17 @@ void* pbridge_env_load_invocation(pbridge_env_t *env, pbridge_pbridge_invok *inv
 int pbridge_env_perform_invocation(pbridge_env_t *env, pbridge_pbridge_invok *invok);
 
 /* Function API */
-pbridge_function_t* pbridge_init_function(pbridge_env_t *env, void *fn_addr);
-int pbridge_invoke_function(pbridge_function_t *func, long *rv);
-void pbridge_destroy_function(pbridge_function_t *func);
+pbridge_function_t* pbridge_func_init(pbridge_env_t *env, void *fn_addr);
+int pbridge_func_invoke(pbridge_function_t *func, long *rv);
+void pbridge_func_destroy(pbridge_function_t *func);
+
+#define pbridge_func_set_param_1(func, val) func->working_regs.rdi = (long)val
+#define pbridge_func_set_param_2(func, val) func->working_regs.rsi = (long)val
+#define pbridge_func_set_param_3(func, val) func->working_regs.rdx = (long)val
+#define pbridge_func_set_param_4(func, val) func->working_regs.rcx = (long)val
+#define pbridge_func_set_param_5(func, val) func->working_regs.r8 = (long)val
+#define pbridge_func_set_param_6(func, val) func->working_regs.r9 = (long)val
+/* next parameters are put on the stack. Caller must clean up the stack. Params can be modified. */
 
 /* Misc API */
 void* pbridge_env_resolve_static_symbol(pbridge_env_t *env, const char *sym_name, char sym_type);

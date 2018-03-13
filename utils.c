@@ -375,7 +375,7 @@ void pbridge_hexdump(const void* data, size_t size) {
 
 /* ******************************************************* */
 
-int pbridge_disassemble(void *code, size_t code_size) {
+int pbridge_disassemble(void *code, size_t code_size, void *base_addr) {
   csh handle;
   cs_insn *insn;
 
@@ -390,7 +390,7 @@ int pbridge_disassemble(void *code, size_t code_size) {
     size_t j;
 
     for (j = 0; j < count; j++)
-      printf("0x%"PRIx64":\t%s\t\t%s\n", (ulong)code + insn[j].address, insn[j].mnemonic, insn[j].op_str);
+      printf("0x%"PRIx64":\t%s\t\t%s\n", (ulong)base_addr + insn[j].address, insn[j].mnemonic, insn[j].op_str);
 
     cs_free(insn, count);
   } else
