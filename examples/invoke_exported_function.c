@@ -46,9 +46,7 @@ static int setup_callme(void *fn_addr) {
   callme_def.base = pbridge_func_init(prog_env, fn_addr);
   if(! callme_def.base) return -1;
 
-  // TODO make generic parameters
-  // first parameters
-  callme_def.base->working_regs.rdi = (long) callme_def.message_buf;
+  pbridge_func_set_param_1(callme_def.base, callme_def.message_buf);
 
   return 0;
 }
@@ -63,7 +61,7 @@ static int callme(const void *message) {
   // Write message into process memory
   pbridge_rw_mem(prog_env->pid, callme_def.message_buf, message, NULL, min(CALLME_STRING_BUF_SIZE, strlen(message)+1));
 
-  long rv;
+  long rv = 0;
 
   pbridge_func_invoke(callme_def.base, &rv);
   return (int)rv;

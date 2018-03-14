@@ -79,9 +79,18 @@ int main(int argc, char **argv) {
 
   pbridge_env_disassemble(prog_env, fn_addr, MEM_TO_CHECK_SIZE);
 
-  puts("\nWaiting for the breakpoint to trigger...");
-  while(pbridge_env_wait(prog_env)-1 != fn_addr) puts("waiting...");
-  puts("Breakpoint hit! Removing the breakpoint");
+  for(int i=0; i<3; i++) {
+    puts("\nWaiting for the breakpoint to trigger...");
+    while(pbridge_env_wait_trap(prog_env) != fn_addr) puts("waiting...");
+
+    puts("Breakpoint hit! Executing the actual code");
+    if(pbridge_env_resolve_breakpoint(prog_env)) {
+      puts("Could not resolve the breakpoint");
+      return -1;
+    }
+  }
+
+  puts("Removing the breakpoint");
 
   if(pbridge_env_del_breakpoint(prog_env, fn_addr)) {
     puts("Unable to remove the breakpoint");

@@ -37,30 +37,40 @@ void* pbridge_env_insert_payload(pbridge_env_t *env, void *payload, size_t paylo
 pbridge_pbridge_invok* pbridge_init_invocation(size_t stack_size);
 void pbridge_destroy_invocation(pbridge_pbridge_invok *invok);
 void* pbridge_env_load_invocation(pbridge_env_t *env, pbridge_pbridge_invok *invok, void *fnaddr);
-int pbridge_env_perform_invocation(pbridge_env_t *env, pbridge_pbridge_invok *invok);
 
 /* Function API */
 pbridge_function_t* pbridge_func_init(pbridge_env_t *env, void *fn_addr);
+int pbridge_prepare_invocation(pbridge_function_t *func);
 int pbridge_func_invoke(pbridge_function_t *func, long *rv);
 void pbridge_func_destroy(pbridge_function_t *func);
 
-#define pbridge_func_set_param_1(func, val) func->working_regs.rdi = (long)val
-#define pbridge_func_set_param_2(func, val) func->working_regs.rsi = (long)val
-#define pbridge_func_set_param_3(func, val) func->working_regs.rdx = (long)val
-#define pbridge_func_set_param_4(func, val) func->working_regs.rcx = (long)val
-#define pbridge_func_set_param_5(func, val) func->working_regs.r8 = (long)val
-#define pbridge_func_set_param_6(func, val) func->working_regs.r9 = (long)val
+#define pbridge_ret_val(regs) regs.rax
+#define pbridge_param_1(regs) regs.rdi
+#define pbridge_param_2(regs) regs.rsi
+#define pbridge_param_3(regs) regs.rdx
+#define pbridge_param_4(regs) regs.rcx
+#define pbridge_param_5(regs) regs.r8
+#define pbridge_param_6(regs) regs.r9
+
+#define pbridge_func_set_param_1(func, val) pbridge_param_1(func->working_regs) = (long)val
+#define pbridge_func_set_param_2(func, val) pbridge_param_2(func->working_regs) = (long)val
+#define pbridge_func_set_param_3(func, val) pbridge_param_3(func->working_regs) = (long)val
+#define pbridge_func_set_param_4(func, val) pbridge_param_4(func->working_regs) = (long)val
+#define pbridge_func_set_param_5(func, val) pbridge_param_5(func->working_regs) = (long)val
+#define pbridge_func_set_param_6(func, val) pbridge_param_6(func->working_regs) = (long)val
 /* next parameters are put on the stack. Caller must clean up the stack. Params can be modified. */
 
 /* Breakpoints API */
 int pbridge_env_set_breakpoint(pbridge_env_t *env, const void *target_addr);
 int pbridge_env_del_breakpoint(pbridge_env_t *env, const void *target_addr);
 int pbridge_env_clear_breakpoints(pbridge_env_t *env);
+int pbridge_env_get_replaced_by_breakpoint(pbridge_env_t *env, const void *target_addr, u_int8_t *instr);
+int pbridge_env_resolve_breakpoint(pbridge_env_t *env);
 
 /* Misc API */
 void* pbridge_env_resolve_static_symbol(pbridge_env_t *env, const char *sym_name, char sym_type);
 void* pbridge_env_get_symbol_got_entry(pbridge_env_t *env, const char *sym_name);
 int pbridge_env_dynamic_symbol_addr_rw(pbridge_env_t *env, const char *sym_name, const void *new_addr, void *old_addr);
-void* pbridge_env_wait(pbridge_env_t *env);
+void* pbridge_env_wait_trap(pbridge_env_t *env);
 
 #endif

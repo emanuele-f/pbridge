@@ -81,7 +81,7 @@ static void* ptrace_call_mmap(pid_t pid, void *base_addr, size_t page_size,
     goto fail;
   }
 
-#if 1
+#if 0
   // modify the jump to skip the data section
   newregs.rax = (long)((u_int8_t*)mmap_memory + data_size);
   if (ptrace(PTRACE_SETREGS, pid, NULL, &newregs)) {
@@ -287,6 +287,7 @@ void pbridge_destroy_invocation(pbridge_pbridge_invok *invok) {
 
 /* ******************************************************* */
 
+#if 0
 static void ptrace_invocation_align_8(pbridge_pbridge_invok *invok) {
   int padding = 8 - (invok->cur_size % 8);
 
@@ -296,6 +297,7 @@ static void ptrace_invocation_align_8(pbridge_pbridge_invok *invok) {
     invok->cur_size++;
   }
 }
+#endif
 
 /* ******************************************************* */
 
@@ -345,7 +347,7 @@ void* pbridge_env_insert_payload(pbridge_env_t *env, void *payload, size_t paylo
 
 /* Insert the invocation in the callee process and returns its load address */
 void* pbridge_env_load_invocation(pbridge_env_t *env, pbridge_pbridge_invok *invok, void *fnaddr) {
-  ptrace_invocation_align_8(invok);
+  //ptrace_invocation_align_8(invok);
 
   if(invok->cur_size > pbridge_env_text_residual(env))
     return NULL;
@@ -357,19 +359,6 @@ void* pbridge_env_load_invocation(pbridge_env_t *env, pbridge_pbridge_invok *inv
   ptrace_invocation_set_jump_offset(invok, jump_offset);
 
   return pbridge_env_insert_payload(env, pbridge_invocation_get_stack(invok), invok->cur_size);
-}
-
-/* ******************************************************* */
-
-/* Insert the invocation in the callee process */
-int pbridge_env_perform_invocation(pbridge_env_t *env, pbridge_pbridge_invok *invok) {
-  // we should stop here with the trap
-  ptrace(PTRACE_CONT, env->pid, NULL, NULL);
-
-  if (pbridge_wait_process("PTRACE_CONT"))
-    return -1;
-
-  return 0;
 }
 
 /* ******************************************************* */
@@ -445,13 +434,13 @@ pbridge_function_t* pbridge_func_init(pbridge_env_t *env, void *fn_addr) {
     return NULL;
   }
 
-  if (ptrace(PTRACE_GETREGS, env->pid, NULL, &new_func->working_regs)) {
-    perror("PTRACE_GETREGS");
-    free(new_func);
-    return NULL;
-  }
+  //if (ptrace(PTRACE_GETREGS, env->pid, NULL, &new_func->working_regs)) {
+    //perror("PTRACE_GETREGS");
+    //free(new_func);
+    //return NULL;
+  //}
 
-  //memcpy(new_func->working_regs, new_func->origin_regs, sizeof(*new_func->working_regs));
+  memcpy(&new_func->working_regs, &env->origin_regs, sizeof(new_func->working_regs));
 
   // Configure the invocation
   new_func->invok = pbridge_init_invocation(64);
@@ -479,24 +468,36 @@ pbridge_function_t* pbridge_func_init(pbridge_env_t *env, void *fn_addr) {
 
 /* ******************************************************* */
 
-int pbridge_func_invoke(pbridge_function_t *func, long *rv) {
-  struct user_regs_struct regs;
-
-  // TODO + supporto both existing invocation and new invocation style call
-  // TODO + consider the cost of a call to ptrace, and restructure accordingly
+int pbridge_prepare_invocation(pbridge_function_t *func) {
+  // why does this crash? changing rax to any other value seems to fix crash...
+  //func->working_regs.rax = 0xfffffffffffffcff;
+  func->working_regs.rax = 0;
 
   if(ptrace(PTRACE_SETREGS, func->env->pid, NULL, &func->working_regs)) {
     perror("PTRACE_SETREGS");
     return -1;
   }
 
-  if(pbridge_env_perform_invocation(func->env, func->invok) != 0) {
-    //perror("pbridge_env_perform_invocation");
+  return 0;
+}
+
+/* ******************************************************* */
+
+
+
+int pbridge_func_invoke(pbridge_function_t *func, long *rv) {
+  struct user_regs_struct regs;
+
+  if(pbridge_prepare_invocation(func))
     return -1;
-  }
+
+  // we should stop here with the trap
+  ptrace(PTRACE_CONT, func->env->pid, NULL, NULL);
+  if(pbridge_wait_process("PTRACE_CONT"))
+    return -1;
 
   // Read rv
-  if (ptrace(PTRACE_GETREGS, func->env->pid, NULL, &regs)) {
+  if(ptrace(PTRACE_GETREGS, func->env->pid, NULL, &regs)) {
     perror("PTRACE_GETREGS");
     return -1;
   }
@@ -509,8 +510,7 @@ int pbridge_func_invoke(pbridge_function_t *func, long *rv) {
 
 void pbridge_func_destroy(pbridge_function_t *func) {
   pbridge_destroy_invocation(func->invok);
-
-  // TODO more finalization?
+  free(func);
 }
 
 /* ******************************************************* */
@@ -661,7 +661,64 @@ int pbridge_env_clear_breakpoints(pbridge_env_t *env) {
 
 /* ******************************************************* */
 
-void* pbridge_env_wait(pbridge_env_t *env) {
+int pbridge_env_get_replaced_by_breakpoint(pbridge_env_t *env, const void *target_addr, u_int8_t *instr) {
+  int rv = -1;
+
+  for(u_int16_t i=0; i < env->cur_breakpoints; i++) {
+    if(env->breakpoints[i].address == target_addr) {
+      *instr = env->breakpoints[i].original_value;
+      rv = 0;
+      break;
+    }
+  }
+
+  return rv;
+}
+
+/* ******************************************************* */
+
+/* Executes the instruction which was replaced by the breakpoint at rip-1 */
+int pbridge_env_resolve_breakpoint(pbridge_env_t *env) {
+  struct user_regs_struct regs;
+
+  if(ptrace(PTRACE_GETREGS, env->pid, NULL, &regs)) {
+    perror("PTRACE_GETREGS");
+    return -1;
+  }
+
+  void *target_addr = (void *)--regs.rip;
+  u_int8_t instr, trap;
+
+  if(pbridge_env_get_replaced_by_breakpoint(env, target_addr, &instr))
+    return -1;
+
+  if(pbridge_rw_mem(env->pid, target_addr, &instr, &trap, 1)) {
+    printf("pbridge_env_resolve_breakpoint: cannot write to target address %p\n", target_addr);
+    return -1;
+  }
+
+  // Set the decremented rip
+  if(ptrace(PTRACE_SETREGS, env->pid, NULL, &regs)) {
+    perror("PTRACE_SETREGS");
+    return -1;
+  }
+
+  // Execute the original instruction
+  if(pbridge_singlestep(env->pid))
+    return -1;
+
+  // Restore the trap
+  if(pbridge_rw_mem(env->pid, target_addr, &trap, NULL, 1)) {
+    printf("pbridge_env_resolve_breakpoint: cannot write trap to target address %p\n", target_addr);
+    return -1;
+  }
+
+  return 0;
+}
+
+/* ******************************************************* */
+
+void* pbridge_env_wait_trap(pbridge_env_t *env) {
   struct user_regs_struct regs;
 
   ptrace(PTRACE_CONT, env->pid, NULL, NULL);
@@ -675,6 +732,7 @@ void* pbridge_env_wait(pbridge_env_t *env) {
     return NULL;
   }
 
-  return (void *)regs.rip;
+  // do not consider TRAP instruction
+  return ((void *)regs.rip) - 1;
 }
 
