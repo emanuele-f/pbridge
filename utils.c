@@ -194,6 +194,8 @@ int pbridge_rw_mem(pid_t pid, const void *where, const void *new_text, void *old
 //
 int pbridge_wait_process(const char *name) {
   int status;
+  char err_msg[64];
+
   if (wait(&status) == -1) {
     perror("wait");
     return -1;
@@ -202,7 +204,9 @@ int pbridge_wait_process(const char *name) {
     if (WSTOPSIG(status) == SIGTRAP) {
       return 0;
     }
-    printf("%s unexpectedly got status %s\n", name, strsignal(status));
+
+    strerror_r(status, err_msg, sizeof(err_msg));
+    printf("%s unexpectedly got status '%s'\n", name, err_msg);
     return -1;
   }
   printf("%s got unexpected status %d\n", name, status);
@@ -375,6 +379,17 @@ void pbridge_hexdump(const void* data, size_t size) {
 
 /* ******************************************************* */
 
+static char* format_instr_bytes(cs_insn *instr) {
+  static __thread char buf[64];
+  const int num_bytes = min(instr->size, 16);
+
+  for(int i=0; i < num_bytes; i++)
+    sprintf(&buf[i * 3], "%02X ", instr->bytes[i]);
+
+  buf[num_bytes * 3 - 1] = '\0';
+  return buf;
+}
+
 int pbridge_disassemble(void *code, size_t code_size, void *base_addr) {
   csh handle;
   cs_insn *insn;
@@ -390,7 +405,8 @@ int pbridge_disassemble(void *code, size_t code_size, void *base_addr) {
     size_t j;
 
     for (j = 0; j < count; j++)
-      printf("0x%"PRIx64":\t%s\t\t%s\n", (ulong)base_addr + insn[j].address, insn[j].mnemonic, insn[j].op_str);
+      printf("0x%"PRIx64":\t%-30s%s\t\t%s\n", (ulong)base_addr + insn[j].address,
+              format_instr_bytes(&insn[j]), insn[j].mnemonic, insn[j].op_str);
 
     cs_free(insn, count);
   } else

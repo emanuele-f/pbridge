@@ -52,9 +52,15 @@ void pbridge_func_destroy(pbridge_function_t *func);
 #define pbridge_func_set_param_6(func, val) func->working_regs.r9 = (long)val
 /* next parameters are put on the stack. Caller must clean up the stack. Params can be modified. */
 
+/* Breakpoints API */
+int pbridge_env_set_breakpoint(pbridge_env_t *env, const void *target_addr);
+int pbridge_env_del_breakpoint(pbridge_env_t *env, const void *target_addr);
+int pbridge_env_clear_breakpoints(pbridge_env_t *env);
+
 /* Misc API */
 void* pbridge_env_resolve_static_symbol(pbridge_env_t *env, const char *sym_name, char sym_type);
 void* pbridge_env_get_symbol_got_entry(pbridge_env_t *env, const char *sym_name);
-void* pbridge_env_overwrite_dynamic_symbol_addr(pbridge_env_t *env, const char *sym_name, void *new_addr);
+int pbridge_env_dynamic_symbol_addr_rw(pbridge_env_t *env, const char *sym_name, const void *new_addr, void *old_addr);
+void* pbridge_env_wait(pbridge_env_t *env);
 
 #endif

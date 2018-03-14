@@ -211,6 +211,13 @@ pbridge_env_t* pbridge_env_init(pid_t pid, size_t data_size) {
 
   printf("Mapped %lu B memory at %p\n", page_size, env->page_addr);
 
+  // restore registers before the call
+  if (ptrace(PTRACE_SETREGS, pid, NULL, &env->origin_regs)) {
+    perror("PTRACE_SETREGS");
+    free(env);
+    return NULL;
+  }
+
   env->pid = pid;
   env->tot_size = page_size;
   env->data_size = data_size;
@@ -235,6 +242,9 @@ int pbridge_env_destroy(pbridge_env_t *env) {
     perror("PTRACE_SETREGS");
     return -1;
   }
+
+  pbridge_env_clear_breakpoints(env);
+  if(env->breakpoints) free(env->breakpoints);
 
   free(env);
   return 0;
@@ -396,15 +406,15 @@ void* pbridge_env_get_symbol_got_entry(pbridge_env_t *env, const char *sym_name)
 
 /* ******************************************************* */
 
-/* useful for injection */
-void* pbridge_env_overwrite_dynamic_symbol_addr(pbridge_env_t *env, const char *sym_name, void *new_addr) {
+int pbridge_env_dynamic_symbol_addr_rw(pbridge_env_t *env, const char *sym_name,
+          const void *new_addr, void *old_addr) {
   void *got_addr = pbridge_env_get_symbol_got_entry(env, sym_name);
-  if(!got_addr) return NULL;
+  if(!got_addr) return -1;
 
-  if(pbridge_rw_mem(env->pid, got_addr, &new_addr, NULL, sizeof(new_addr)) != 0)
-    return NULL;
+  if(pbridge_rw_mem(env->pid, got_addr, new_addr, old_addr, PTR_SIZE) != 0)
+    return -1;
 
-  return got_addr;
+  return 0;
 }
 
 /* ******************************************************* */
@@ -561,3 +571,110 @@ void pbridge_env_dump_registers(pbridge_env_t *env) {
 
   pbridge_dump_registers(&regs);
 }
+
+/* ******************************************************* */
+
+// note: must be a power of two
+#define FLOOR_BREAKPOINTS_SIZE 4
+
+int pbridge_env_set_breakpoint(pbridge_env_t *env, const void *target_addr) {
+  u_int8_t prev_value;
+  u_int8_t new_value = TRAP;
+
+  if(pbridge_rw_mem(env->pid, target_addr, &new_value, &prev_value, 1)) {
+    printf("pbridge_env_set_breakpoint: cannot write to target address %p\n", target_addr);
+    return -1;
+  }
+
+  if(env->max_breakpoints == env->cur_breakpoints) {
+    if(env->max_breakpoints == (1 << 15)) {
+      puts("Maximum number of breakpoints reached");
+      return -1;
+    }
+
+    u_int16_t new_size = (env->max_breakpoints) ? (env->max_breakpoints << 1) : FLOOR_BREAKPOINTS_SIZE;
+    pbridge_breakpoint_t *new_list = (pbridge_breakpoint_t *) calloc(new_size, sizeof(pbridge_breakpoint_t));
+
+    if(new_list == NULL) {
+      perror("calloc breakpoints");
+      return -1;
+    }
+
+    if(env->breakpoints) {
+      memcpy(new_list, env->breakpoints, env->cur_breakpoints * sizeof(pbridge_breakpoint_t));
+      free(env->breakpoints);
+    }
+
+    env->breakpoints = new_list;
+    env->max_breakpoints = new_size;
+  }
+
+  env->breakpoints[env->cur_breakpoints].address = (void *)target_addr;
+  env->breakpoints[env->cur_breakpoints].original_value = prev_value;
+  env->cur_breakpoints++;
+
+  return 0;
+}
+
+/* ******************************************************* */
+
+int pbridge_env_del_breakpoint(pbridge_env_t *env, const void *target_addr) {
+  int rv = -1;
+
+  for(u_int16_t i=0; i < env->cur_breakpoints; i++) {
+    if(env->breakpoints[i].address == target_addr) {
+      if(pbridge_rw_mem(env->pid, target_addr, &env->breakpoints[i].original_value, NULL, 1)) {
+        printf("pbridge_env_del_breakpoint: cannot write to target address %p\n", target_addr);
+        return -1;
+      }
+
+      // Shift left the next breakponts
+      memmove(&env->breakpoints[i], &env->breakpoints[i+1], env->cur_breakpoints - i - 1);
+      memset(&env->breakpoints[env->cur_breakpoints - 1], 0, sizeof(pbridge_breakpoint_t));
+      env->cur_breakpoints--;
+
+      rv = 0;
+      break;
+    }
+  }
+
+  return rv;
+}
+
+/* ******************************************************* */
+
+int pbridge_env_clear_breakpoints(pbridge_env_t *env) {
+  int rv = 0;
+
+  for(u_int16_t i=0; i < env->cur_breakpoints; i++) {
+    if(pbridge_rw_mem(env->pid, env->breakpoints[i].address, &env->breakpoints[i].original_value, NULL, 1)) {
+      printf("remove_breakpoints: cannot write to target address %p\n", env->breakpoints[i].address);
+      rv = -1;
+    }
+  }
+
+  memset(env->breakpoints, 0, env->cur_breakpoints * sizeof(pbridge_breakpoint_t));
+  env->cur_breakpoints = 0;
+
+  return rv;
+}
+
+/* ******************************************************* */
+
+void* pbridge_env_wait(pbridge_env_t *env) {
+  struct user_regs_struct regs;
+
+  ptrace(PTRACE_CONT, env->pid, NULL, NULL);
+  if(pbridge_wait_process("PTRACE_CONT")) {
+    puts("pbridge_wait_process returned error");
+    return NULL;
+  }
+
+  if(ptrace(PTRACE_GETREGS, env->pid, NULL, &regs)) {
+    perror("PTRACE_GETREGS");
+    return NULL;
+  }
+
+  return (void *)regs.rip;
+}
+

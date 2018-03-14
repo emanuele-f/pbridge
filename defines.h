@@ -21,6 +21,13 @@
 
 #include <sys/user.h>
 
+#define PTR_SIZE (sizeof(void *))
+
+typedef struct pbridge_breakpoint {
+  void *address;
+  u_int8_t original_value;
+} pbridge_breakpoint_t;
+
 typedef struct pbridge_env {
   size_t tot_size;
   size_t text_size;
@@ -30,6 +37,9 @@ typedef struct pbridge_env {
 
   int pid;
   struct user_regs_struct origin_regs;
+  pbridge_breakpoint_t *breakpoints;
+  u_int16_t cur_breakpoints;
+  u_int16_t max_breakpoints;
 
   /* In tracee process memory */
   void *base_addr; // relocated base address
