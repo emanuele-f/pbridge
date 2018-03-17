@@ -1,4 +1,4 @@
-# pbridge - Process Bridge utilities for x64 linux
+# pbridge - ptrace based framework for 64 bits linux process injection
 
 pbridge is a framework which provides an API to ease linux process debugging and
 function hijacking via the `ptrace` environment.
@@ -19,7 +19,7 @@ Compiling
 Base `gcc` and `make` environment required.
 The `capstone` library is required to perform code disassembly for debugging.
 
-In order to build the `libpbridge.a` library and the example, just run `make`.
+In order to build the `libpbridge.a` library and the examples, just run `make`.
 
 Examples
 --------
