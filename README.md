@@ -1,4 +1,4 @@
-# pbridge - ptrace based framework for 64 bits linux process injection
+# pbridge
 
 pbridge is a framework which provides an API to ease linux process debugging and
 function hijacking via the `ptrace` environment.
