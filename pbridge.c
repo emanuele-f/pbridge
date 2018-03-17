@@ -28,6 +28,13 @@
 
 /* ******************************************************* */
 
+/* Internal invocation API */
+pbridge_pbridge_invok* pbridge_init_invocation(size_t stack_size);
+void pbridge_destroy_invocation(pbridge_pbridge_invok *invok);
+void* pbridge_env_load_invocation(pbridge_env_t *env, pbridge_pbridge_invok *invok, void *fnaddr);
+
+/* ******************************************************* */
+
 /* Performs a call to mmap on ptrace */
 static void* ptrace_call_mmap(pid_t pid, void *base_addr, size_t page_size,
             size_t data_size, const struct user_regs_struct *oldregs) {
@@ -404,12 +411,6 @@ int pbridge_env_dynamic_symbol_addr_rw(pbridge_env_t *env, const char *sym_name,
     return -1;
 
   return 0;
-}
-
-/* ******************************************************* */
-
-void pbridge_env_load_reset_text(pbridge_env_t *env) {
-  env->text_used = 0;
 }
 
 /* ******************************************************* */
