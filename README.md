@@ -26,6 +26,7 @@ Examples
 
 The following examples (sometimes also used as test cases) are provided:
 
+- `write_test`: write and read to process memory
 - `invoke_exported_function`: attach to a running process (run `target`) and invoke one of its exported functions
 - `replace_call`: replace `puts` call with a custom function by exploting the GOT table
 - `breakpoint_test`: place breakpoints on process memory and wait for them to trigger
